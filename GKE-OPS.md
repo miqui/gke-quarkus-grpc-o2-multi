@@ -107,6 +107,74 @@ zones still take theirs). At the HPA max of 6, the replicas fit as 2/2/2 (each z
 **To verify after applying:** cordon zone b's node, then delete the zone-b API pod. Its replacement
 should stay Pending, not go to a or c, until you uncordon the node.
 
+## HA plan for the short-lived dev cluster (proposed, not applied)
+
+The cluster runs for a couple of hours at a time to prove high availability and resilience. That
+changes the trade-offs: cost per hour and slower scale-outs barely matter, and a demo that fails
+for an avoidable reason does. Ordered by value to the demo. Background:
+[Mastering topology spread constraints and pod affinity](https://cast.ai/blog/mastering-topology-spread-constraints-and-pod-affinity/).
+
+**Recommended first:** 1, 5 and 10 together give a repeatable "lose a zone under load, zero failed
+requests" result.
+
+### Spread constraints
+
+1. **Apply the hard zone spread** from the section above (`DoNotSchedule` + `nodeTaintsPolicy:
+   Honor` + `matchLabelKeys: [pod-template-hash]`). The cost, a 1-2 min wait for a node on
+   scale-out, doesn't matter on a demo cluster. The soft spread can stack all replicas in one zone,
+   as it did on 2026-10-16.
+2. **Don't add `minDomains: 3`.** With `Honor`, a dead zone drops out of the count, leaving 2
+   domains. That's under `minDomains`, so the scheduler treats the global minimum as 0 and the
+   replacement pod stays Pending for the whole outage. `BALANCED` autoscaling with
+   `total-min-nodes=3` already keeps a node in every zone.
+3. **Keep the hostname constraint soft.** At the HPA max of 6 replicas on as few as 3 nodes, pods
+   have to share nodes.
+4. **No `podAffinity` from the API to Hazelcast.** With one Hazelcast replica it would pull every
+   API pod into one zone.
+
+### Single points of failure
+
+5. **Hazelcast `replicas: 1`.** Run 3 members with Kubernetes discovery and
+   `partition-group: ZONE_AWARE` (backups in another zone), the same hard zone spread, and a PDB.
+   Or keep one member and explicitly show the API degrading gracefully when the cache is lost.
+6. **Cloud SQL `availabilityType: ZONAL`** (`k8s/platform/postgres-composition.yaml`). `REGIONAL`
+   costs little extra for a 2-hour cluster and gives a real failover to run under load
+   (`gcloud sql instances failover`).
+7. **Zonal control plane.** The reason for staying zonal is GKE's free-tier credit; a regional
+   cluster adds about $0.10/hour (check current pricing), which is negligible here. It makes the
+   "zone a" row of the table above survivable.
+
+### Fast, observable failover
+
+8. **Spare capacity per zone (balloon pods).** The 2026-10-16 stacking happened because zones b and
+   c were 75-85% CPU-requested. A low-priority `pause` Deployment (negative `PriorityClass`, ~1 per
+   zone, zone-spread) gets preempted by failover pods, which then start in seconds instead of
+   waiting for a node.
+9. **Rebalance after recovery.** Spread constraints apply only at scheduling time, so after a zone
+   returns the replicas stay 2/1/0. Either install the descheduler with
+   `RemovePodsViolatingTopologySpreadConstraint` to show self-healing, or make
+   `kubectl rollout restart deployment/job-manager-api` a runbook step.
+10. **Scripted failure drill**, the same on every cluster run, each under k6 load with error rate and
+    p99 recorded to `experiments/`:
+
+    ```bash
+    # Zone loss: evicts the zone's pods and exercises nodeTaintsPolicy: Honor
+    kubectl taint nodes -l topology.kubernetes.io/zone=us-central1-b node.kubernetes.io/unreachable=:NoExecute
+    # ...observe, then recover:
+    kubectl taint nodes -l topology.kubernetes.io/zone=us-central1-b node.kubernetes.io/unreachable:NoExecute-
+    # Voluntary disruption: the PDB keeps >= 2 replicas serving
+    kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+    # Database failover (needs item 6)
+    gcloud sql instances failover <instance>
+    ```
+
+### Optional
+
+11. **Enforce spread with Kyverno.** A policy requiring (or injecting) a zone spread on any
+    Deployment with `replicas > 1` keeps new workloads from reintroducing the stacking problem.
+12. **Leave single-zone tools alone.** OpenObserve, Trivy, Grafana and Prometheus aren't under test;
+    their zonal disks pin them to one zone, and that's accepted.
+
 ## "Cluster Autoscaler skipped scaling up default-pool" for `node-collector-*`
 
 Seen as a `NotTriggerScaleUp` note, e.g.:
