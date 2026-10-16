@@ -160,7 +160,9 @@ requests" result.
     ```bash
     # Zone loss: evicts the zone's pods and exercises nodeTaintsPolicy: Honor
     kubectl taint nodes -l topology.kubernetes.io/zone=us-central1-b node.kubernetes.io/unreachable=:NoExecute
+    kubectl taint nodes -l topology.kubernetes.io/zone=us-central1-b node.kubernetes.io/unreachable=:NoSchedule
     # ...observe, then recover:
+    kubectl taint nodes -l topology.kubernetes.io/zone=us-central1-b node.kubernetes.io/unreachable:NoSchedule-
     kubectl taint nodes -l topology.kubernetes.io/zone=us-central1-b node.kubernetes.io/unreachable:NoExecute-
     # Voluntary disruption: the PDB keeps >= 2 replicas serving
     kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
