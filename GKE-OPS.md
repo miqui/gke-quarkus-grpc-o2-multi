@@ -46,6 +46,67 @@ gcloud container clusters update $CLUSTER --zone $ZONE \
 kubectl rollout restart deployment/job-manager-api
 ```
 
+## API replicas stacked in one zone (soft zone spread) - fix documented, not applied
+
+**Observed 2026-10-16** on the first multi-zone build (`gke-architecture-zones.drawio`):
+
+- 16:01 a Trivy scan pod triggered a scale-up in `us-central1-a` (the b and c nodes were 75-85%
+  CPU-requested).
+- 16:02 an API rollout put **all 3 `job-manager-api` replicas in zone a**, two of them on the new,
+  empty node.
+- 16:27 the autoscaler drained that node. The PDB let one pod go at a time, and the two
+  replacements landed in b and c (1/1/1), because those zones now had room.
+
+**Why:** the zone constraint in `k8s/deployment.yaml` is `whenUnsatisfiable: ScheduleAnyway`, so
+it only affects the scheduler's *scoring*, as one factor among several. Here the preference for an
+empty node won. The spread holds only when every zone has spare CPU, so the next scan burst or
+rollout can stack the replicas again. A zone-a outage at such a moment would take out every replica
+along with Cloud SQL.
+
+**How to check:** the node name encodes the zone's instance group, or use:
+
+```bash
+kubectl get pods -l app=job-manager-api -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName --no-headers \
+  | while read p n; do echo "$p $(kubectl get node $n -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}')"; done
+# Kubernetes Events expire after ~1 h; autoscaler decisions stay in Cloud Logging for 30 days:
+gcloud logging read 'logName="projects/k8s-dev-412419/logs/container.googleapis.com%2Fcluster-autoscaler-visibility" AND (jsonPayload.decision.scaleUp:* OR jsonPayload.decision.scaleDown:*)' \
+  --freshness=1d --limit 20 \
+  --format='table(timestamp, jsonPayload.decision.scaleUp.increasedMigs[0].mig.zone, jsonPayload.decision.scaleDown.nodesToBeRemoved[0].node.name)'
+```
+
+**The fix (not applied; the cluster runs with the soft spread):** make the zone constraint a hard
+filter. Leave the hostname constraint soft, since 6 replicas on 3 nodes have to share nodes anyway.
+
+```yaml
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule      # was ScheduleAnyway
+          nodeTaintsPolicy: Honor               # required, see below
+          matchLabelKeys: [pod-template-hash]   # balance each rollout's ReplicaSet on its own
+          labelSelector:
+            matchLabels:
+              app: job-manager-api
+```
+
+- `DoNotSchedule`: a pod that would make the zones uneven by more than 1 is not placed. If the
+  zone it needs is full, the pod stays Pending, and the cluster autoscaler (which simulates topology
+  spread) adds a node in *that* zone.
+- `nodeTaintsPolicy: Honor`: **don't use `DoNotSchedule` without it.** When a whole zone fails,
+  Kubernetes evicts its pods at the normal rate. It only pauses evictions on small clusters when a
+  zone is *partly* unhealthy. The evicted pod's replacement then needs a zone, but the dead zone's
+  NotReady nodes still count as a domain with 0 pods. Placing the pod in b or c would make the skew
+  2, so it would stay Pending for the whole outage. `Honor` drops nodes with taints the pod doesn't
+  tolerate (`node.kubernetes.io/unreachable:NoSchedule`) from the count.
+- `matchLabelKeys: [pod-template-hash]`: during a rollout, old and new pods aren't counted together,
+  so the new ReplicaSet ends up 1/1/1.
+
+**Trade-offs:** an HPA scale-out into a full zone waits ~1-2 min for a node instead of starting
+elsewhere. A zone out of `e2-standard-2` capacity leaves the pods that zone needs Pending (the other
+zones still take theirs). At the HPA max of 6, the replicas fit as 2/2/2 (each zone allows up to 4 nodes).
+
+**To verify after applying:** cordon zone b's node, then delete the zone-b API pod. Its replacement
+should stay Pending, not go to a or c, until you uncordon the node.
+
 ## "Cluster Autoscaler skipped scaling up default-pool" for `node-collector-*`
 
 Seen as a `NotTriggerScaleUp` note, e.g.:

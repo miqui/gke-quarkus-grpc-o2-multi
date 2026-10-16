@@ -94,7 +94,8 @@ Secrets overwrites them.
     `roles/container.defaultNodeServiceAccount` plus read access to the one Artifact Registry repo -
     not the default compute account, which has project Editor.
   - No node pinning: the scheduler places everything. `job-manager-api` has soft topology spread
-    constraints across nodes and zones (one replica per zone at 3 replicas) and a
+    constraints across nodes and zones (aims for one replica per zone; soft, so it can stack -
+    see GKE-OPS.md) and a
     `PodDisruptionBudget` (`k8s/pdb.yaml`, `minAvailable: 2`) for drains and upgrades. A `HorizontalPodAutoscaler`
     (`k8s/hpa.yaml`) keeps it between 3 and 6 replicas, scaling on CPU only (70% average utilization; a JVM keeps the heap it has grown to, so a memory
     target would pin it at the maximum) against the container's `resources.requests` in `k8s/deployment.yaml`; GKE ships
