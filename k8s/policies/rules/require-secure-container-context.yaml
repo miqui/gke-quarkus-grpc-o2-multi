@@ -1,5 +1,6 @@
 # Pod Security Standards "restricted" subset. Each container (init containers included) must run
-# as non-root, forbid privilege escalation, drop ALL capabilities and use a seccomp profile.
+# as non-root, forbid privilege escalation, drop ALL capabilities and use a seccomp profile, and
+# must not opt out of AppArmor.
 # Pod-level securityContext values count as the default for containers that don't override them.
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -43,3 +44,14 @@ spec:
             object.spec.?securityContext.?seccompProfile.?type.orValue(''))
           in ['RuntimeDefault', 'Localhost'])
       message: "Containers must use a RuntimeDefault or Localhost seccomp profile."
+    # AppArmor (a "baseline" control): leaving it unset is fine - COS nodes apply containerd's
+    # default profile - so only an explicit opt-out is denied, via the field or the deprecated
+    # per-container annotation (the API server converts that one only when the Pod is created).
+    - expression: >-
+        object.spec.?securityContext.?appArmorProfile.?type.orValue('') != 'Unconfined' &&
+        variables.containers.all(c,
+          c.?securityContext.?appArmorProfile.?type.orValue('') != 'Unconfined') &&
+        object.metadata.?annotations.orValue({}).all(k,
+          !k.startsWith('container.apparmor.security.beta.kubernetes.io/') ||
+          object.metadata.annotations[k] != 'unconfined')
+      message: "AppArmor must not be Unconfined (pod/container appArmorProfile or annotation)."
