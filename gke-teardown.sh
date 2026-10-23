@@ -8,7 +8,8 @@
 #   3. Leftovers: any Cloud SQL instance this platform labelled, the load balancer's forwarding
 #      rule on grpc-ip, network endpoint groups in the VPC, and the PVCs' persistent disks (a
 #      cluster deletion leaves both behind)
-#   4. Private Service Access peering + range, static IP, SSL policy, Cloudflare A record
+#   4. Private Service Access peering + range, static IP, SSL policy, Cloud Armor policy,
+#      Cloudflare A record
 #   5. Firewall rules in the VPC, Cloud NAT, Cloud Router, subnet, VPC
 #
 # Kept by default (free or pennies, and slow/awkward to recreate) - removed with --purge:
@@ -43,6 +44,7 @@ API_HOST="${API_HOST:-grpc.${DOMAIN}}"
 PSA_RANGE_NAME="cloudsql-psa-range"
 IP_NAME="grpc-ip"
 SSL_POLICY="grpc-tls"
+ARMOR_POLICY="grpc-allowlist"
 DNS_AUTH="grpc-dns-auth"
 CERT="grpc-cert"
 CERT_MAP="grpc-cert-map"
@@ -84,7 +86,8 @@ cat <<EOF
 About to DELETE the following resources in project '$PROJECT_ID':
 
   Cloud SQL            : the platform's instance(s) - ALL DATA IS LOST (no backups are kept)
-  Load balancer        : Gateway for $API_HOST, static IP $IP_NAME, SSL policy $SSL_POLICY
+  Load balancer        : Gateway for $API_HOST, static IP $IP_NAME, SSL policy $SSL_POLICY,
+                         Cloud Armor policy $ARMOR_POLICY
   GKE cluster          : $CLUSTER (zone $ZONE)
   Persistent disks     : the PVCs' disks (OpenObserve, Trivy) - their data is lost
   Network              : NEGs, PSA peering/range, firewall rules, $NAT / $ROUTER, $SUBNET / $VPC
@@ -226,11 +229,15 @@ if gcloud compute addresses describe "$PSA_RANGE_NAME" --global &>/dev/null; the
   gcloud compute addresses delete "$PSA_RANGE_NAME" --global --quiet
 fi
 
-log "Releasing static IP $IP_NAME and SSL policy $SSL_POLICY"
+log "Releasing static IP $IP_NAME, SSL policy $SSL_POLICY and Cloud Armor policy $ARMOR_POLICY"
 if [[ -n "$API_IP" ]]; then gcloud compute addresses delete "$IP_NAME" --global --quiet; else skip; fi
 if gcloud compute ssl-policies describe "$SSL_POLICY" --global &>/dev/null; then
   gcloud compute ssl-policies delete "$SSL_POLICY" --global --quiet || \
     echo "    WARNING: $SSL_POLICY still in use by a leftover target proxy; delete it later" >&2
+fi
+if gcloud compute security-policies describe "$ARMOR_POLICY" &>/dev/null; then
+  gcloud compute security-policies delete "$ARMOR_POLICY" --quiet || \
+    echo "    WARNING: $ARMOR_POLICY still in use by a leftover backend service; delete it later" >&2
 fi
 
 # A released IP goes back into Google's pool and can be handed to someone else; a DNS record

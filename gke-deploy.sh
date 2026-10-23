@@ -81,6 +81,7 @@ WIF_PROVIDER="github-oidc"
 # Public edge (names referenced by k8s/gateway.yaml)
 IP_NAME="grpc-ip"
 SSL_POLICY="grpc-tls"
+ARMOR_POLICY="grpc-allowlist"
 DNS_AUTH="grpc-dns-auth"
 CERT="grpc-cert"
 CERT_MAP="grpc-cert-map"
@@ -118,6 +119,8 @@ if [[ "$IAM_CHECK" == "1" ]]; then
     compute.globalAddresses.create
     compute.firewalls.create
     compute.sslPolicies.create
+    compute.securityPolicies.create
+    compute.securityPolicies.update
     servicenetworking.services.addPeering
     container.clusters.create
     container.clusters.getCredentials
@@ -465,6 +468,28 @@ else
   gcloud compute ssl-policies create "$SSL_POLICY" --global --profile=MODERN --min-tls-version=1.2
 fi
 
+# The API has no authentication, so Cloud Armor (attached by the GCPBackendPolicy in
+# k8s/gateway.yaml) only lets these source ranges reach it: comma-separated, at most 10.
+# The allow rule is rewritten on every run, so re-running after an IP change re-authorizes it.
+API_ALLOWED_CIDRS="${API_ALLOWED_CIDRS:-$MY_IP/32}"
+log "Cloud Armor policy: $ARMOR_POLICY (allow $API_ALLOWED_CIDRS, deny the rest)"
+if gcloud compute security-policies describe "$ARMOR_POLICY" &>/dev/null; then
+  echo "    policy exists"
+else
+  gcloud compute security-policies create "$ARMOR_POLICY" \
+    --description="job-manager-api source allowlist (gke-deploy.sh)"
+fi
+gcloud compute security-policies rules update 2147483647 --security-policy="$ARMOR_POLICY" \
+  --action=deny-403 >/dev/null
+if gcloud compute security-policies rules describe 1000 --security-policy="$ARMOR_POLICY" &>/dev/null; then
+  gcloud compute security-policies rules update 1000 --security-policy="$ARMOR_POLICY" \
+    --src-ip-ranges="$API_ALLOWED_CIDRS" --action=allow >/dev/null
+else
+  gcloud compute security-policies rules create 1000 --security-policy="$ARMOR_POLICY" \
+    --src-ip-ranges="$API_ALLOWED_CIDRS" --action=allow \
+    --description="allowed API clients" >/dev/null
+fi
+
 # DNS authorization lets Google issue the cert before (and independently of) the load balancer
 # existing, so the cert survives cluster rebuilds and is valid the moment a new Gateway comes up.
 log "Certificate Manager: DNS authorization, certificate, cert map for $API_HOST"
@@ -536,10 +561,14 @@ $(printf '\033[1;32mDone.\033[0m') Cluster '$CLUSTER' and its GCP foundation are
     2. PROJECT_ID=$PROJECT_ID ./gke-bootstrap.sh
     3. ./gke-port-forward.sh     (Argo CD, Grafana, Prometheus, OpenObserve, Headlamp, Polaris)
 
-  If your public IP changes, re-authorize it:
+  API clients allowed by Cloud Armor ($ARMOR_POLICY): $API_ALLOWED_CIDRS
+
+  If your public IP changes, re-authorize it (control plane, then the API):
     gcloud container clusters update $CLUSTER --zone=$ZONE \\
       --enable-master-authorized-networks \\
       --master-authorized-networks=NEW_IP/32
+    gcloud compute security-policies rules update 1000 --security-policy=$ARMOR_POLICY \\
+      --src-ip-ranges=NEW_IP/32
 
   Tear down (keeps registry, cert, secrets, service accounts): PROJECT_ID=$PROJECT_ID ./gke-teardown.sh
 EOF
