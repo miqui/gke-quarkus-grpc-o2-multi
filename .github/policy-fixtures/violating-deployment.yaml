@@ -24,3 +24,5 @@ spec:
           image: evil.example.com/policy-check/violator:latest
           securityContext:
             privileged: true
+            appArmorProfile:
+              type: Unconfined

@@ -343,7 +343,7 @@ examples that use it.
 | Policy | What it checks | Mode |
 | --- | --- | --- |
 | `disallow-host-access` | no privileged containers, `hostNetwork`/`hostPID`/`hostIPC`, `hostPath` volumes or `hostPort`s (a Pod Security Standards "baseline" subset) | Deny in `default`, Audit in `observability`/`headlamp`/`polaris` |
-| `require-secure-container-context` | every container, init containers included: `runAsNonRoot`, `allowPrivilegeEscalation: false`, drop `ALL` capabilities, `RuntimeDefault`/`Localhost` seccomp (a "restricted" subset; pod-level values count as defaults) | same |
+| `require-secure-container-context` | every container, init containers included: `runAsNonRoot`, `allowPrivilegeEscalation: false`, drop `ALL` capabilities, `RuntimeDefault`/`Localhost` seccomp (a "restricted" subset; pod-level values count as defaults), and no `Unconfined` AppArmor (field or legacy annotation; unset is fine - nodes apply containerd's default profile) | same |
 | `require-resources` | CPU and memory requests **and** limits on every container | same |
 | `restrict-image-repositories` | image must be on an exact-repository allowlist (tags/digests ignored; `postgres:16-alpine` is normalized to `docker.io/library/postgres`) | same |
 | `disallow-latest-tag` | image pinned to a tag other than `:latest`, or a digest | Audit only |
