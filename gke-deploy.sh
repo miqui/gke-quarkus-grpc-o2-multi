@@ -120,6 +120,7 @@ if [[ "$IAM_CHECK" == "1" ]]; then
     compute.firewalls.create
     compute.sslPolicies.create
     compute.securityPolicies.create
+    compute.securityPolicies.update
     servicenetworking.services.addPeering
     container.clusters.create
     container.clusters.getCredentials
