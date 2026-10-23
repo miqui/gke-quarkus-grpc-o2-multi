@@ -94,6 +94,14 @@ grpcurl grpc.miqui.dev:443 grpc.health.v1.Health/Check  # from an allowed IP: SE
 - **Containers:** non-root UID 10001, read-only root filesystem, all capabilities dropped,
   `seccomp: RuntimeDefault`, all enforced by Kyverno.
 
-**Not security, but probably a bug:** `gke-deploy.sh` defaults `GITHUB_REPO` to
-`miqui/gke-quarkus-grpc-o2` (the original repo), not this `-multi` repo. Unless you override it,
-the CI here can't impersonate the push service account, and the original repo's main branch can.
+**Not security, but a bug (fixed):** `gke-deploy.sh` defaulted `GITHUB_REPO` to
+`miqui/gke-quarkus-grpc-o2` (the original repo), so this repo's CI couldn't impersonate the push
+service account and the original repo's main branch could. It now defaults to this repo. Re-running
+`gke-deploy.sh` adds this repo's binding but doesn't remove the original's. Once the original repo
+should no longer push here:
+
+```bash
+gcloud iam service-accounts remove-iam-policy-binding \
+  ci-springboot-grpc-o2@k8s-dev-412419.iam.gserviceaccount.com --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/$(gcloud projects describe k8s-dev-412419 --format='value(projectNumber)')/locations/global/workloadIdentityPools/github/attribute.repository/miqui/gke-quarkus-grpc-o2"
+```
