@@ -57,7 +57,9 @@ MAX_NODES="${MAX_NODES:-6}"
 NODE_DISK_SIZE_GB="${NODE_DISK_SIZE_GB:-30}"
 DOMAIN="${DOMAIN:-miqui.dev}"
 API_HOST="${API_HOST:-grpc.${DOMAIN}}"
-GITHUB_REPO="${GITHUB_REPO:-miqui/gke-quarkus-grpc-o2}"
+# The repo whose CI (main branch) may push images - this one. Argo CD's source repo is separate:
+# gke-bootstrap.sh's GITHUB_REPO and the repoURLs under k8s/argocd/.
+GITHUB_REPO="${GITHUB_REPO:-miqui/gke-quarkus-grpc-o2-multi}"
 
 SUBNET_RANGE="10.0.0.0/20"
 PODS_RANGE="10.4.0.0/14"
