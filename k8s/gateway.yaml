@@ -11,9 +11,12 @@
 #   grpc-ip        global static IP (the Cloudflare A record points here)
 #   grpc-cert-map  Certificate Manager map -> Google-managed cert for grpc.miqui.dev (DNS-authorized)
 #   grpc-tls       SSL policy: MODERN profile, TLS 1.2 minimum
+#   grpc-allowlist Cloud Armor policy: allow API_ALLOWED_CIDRS (default: the operator's IP), deny
+#                  the rest with 403 (gRPC PERMISSION_DENIED) - see the GCPBackendPolicy below
 #
 # There is no port 80 listener: gRPC clients never use plain HTTP, so a redirect would serve no one.
-# The API itself has no authentication yet - anyone can call it, reflection included.
+# The API itself has no authentication yet, so the Cloud Armor allowlist is the only thing keeping
+# the internet out (SEC.md, Vuln 1).
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -91,3 +94,20 @@ spec:
     group: gateway.networking.k8s.io
     kind: Gateway
     name: grpc
+---
+# Cloud Armor on the API's backend service: only the source ranges in the grpc-allowlist policy
+# (gke-deploy.sh, section 10) reach the pods; everyone else gets a 403 from the load balancer.
+# The load balancer's own health checks are not subject to Cloud Armor.
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: job-manager-api
+  labels:
+    app: job-manager-api
+spec:
+  default:
+    securityPolicy: grpc-allowlist
+  targetRef:
+    group: ""
+    kind: Service
+    name: job-manager-api
